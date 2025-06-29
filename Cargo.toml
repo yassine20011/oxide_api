@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "oxide_api"
+description = "FastAPI with Rust Integration for High Performance"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Yassine Amjad", email = "yassine.amjad001@gmail.com"},
+]
+dependencies = [
+    "fastapi>=0.68.0",
+    "pydantic>=1.8.0",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "uvicorn[standard]>=0.15.0",
+    "httpx>=0.24.0",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "oxide_api._rustcore"

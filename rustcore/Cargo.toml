@@ -1,0 +1,14 @@
+[package]
+name = "rustcore"
+version = "0.1.0"
+edition = "2025"
+
+[lib]
+name = "rustcore"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true, features = ["extension-module"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1.0"
