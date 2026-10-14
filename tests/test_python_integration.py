@@ -15,6 +15,10 @@ def get_user(user_id: int):
 def create_user(user: dict):
     return {"message": "User created", "user": user}
 
+@app.get("/legacy/{item_id}")
+def get_legacy_item(item_id: int):
+    return {"legacy_item_id": item_id, "status": "active"}
+
 client = TestClient(app)
 
 def test_get_user():
@@ -56,3 +60,11 @@ def test_openapi_fallback():
     data = response.json()
     assert "openapi" in data
     assert "/users/{user_id}" in data["paths"]
+
+def test_vanilla_fastapi_parameterized_route_fallback():
+    response = client.get("/legacy/456")
+    assert response.status_code == 200
+    assert response.json() == {"legacy_item_id": 456, "status": "active"}
+
+    response_invalid = client.get("/legacy/invalid_id")
+    assert response_invalid.status_code == 422

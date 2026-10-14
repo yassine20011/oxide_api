@@ -7,6 +7,14 @@ from fastapi.responses import JSONResponse, Response
 import oxide_api._rustcore as _rustcore
 from oxide_api.decorators import HANDLERS, SCHEMAS
 
+try:
+    import orjson
+    def dump_json_bytes(content: Any) -> bytes:
+        return orjson.dumps(content)
+except ImportError:
+    def dump_json_bytes(content: Any) -> bytes:
+        return json.dumps(content).encode("utf-8")
+
 STATIC_HEADER_CONTENT_TYPE = (b"content-type", b"application/json")
 NOT_FOUND_BODY = b'{"detail":"Not Found"}'
 NOT_FOUND_HEADERS = [
@@ -100,6 +108,15 @@ def _sync_app_routes(app: FastAPI):
             for m in methods:
                 if path:
                     _rustcore.register_route(m, path, route_id, param_types, schema)
+        else:
+            path = getattr(route, "path", None)
+            if path and not (path in ("/openapi.json", "/docs", "/redoc") or path.startswith(("/docs/", "/redoc/"))):
+                methods = getattr(route, "methods", ["GET"])
+                for m in methods:
+                    try:
+                        _rustcore.register_route(m, path, "__fastapi__", {}, None)
+                    except Exception:
+                        pass
 
     app._has_oxide_routes = has_oxide
     app._fastapi_routes = {
@@ -123,7 +140,7 @@ async def send_json(send, status_code: int, content: Any):
     elif isinstance(content, str):
         payload = content.encode("utf-8")
     else:
-        payload = json.dumps(content).encode("utf-8")
+        payload = dump_json_bytes(content)
 
     await send({
         "type": "http.response.start",
@@ -189,6 +206,10 @@ async def _oxide_fastapi_call(self, scope, receive, send):
         return
 
     status_code, route_id, data = res
+
+    if route_id == "__fastapi__":
+        await _original_fastapi_call(self, scope, receive, send)
+        return
 
     if status_code == 422:
         await send_json(send, 422, data)
