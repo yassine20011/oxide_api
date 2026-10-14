@@ -1,11 +1,44 @@
 import asyncio
 import inspect
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
 import oxide_api._rustcore as _rustcore
 from oxide_api.decorators import HANDLERS, SCHEMAS
+
+STATIC_HEADER_CONTENT_TYPE = (b"content-type", b"application/json")
+NOT_FOUND_BODY = b'{"detail":"Not Found"}'
+NOT_FOUND_HEADERS = [
+    STATIC_HEADER_CONTENT_TYPE,
+    (b"content-length", b"22"),
+]
+
+class HandlerMetadata:
+    __slots__ = ("handler", "is_async", "single_body_param", "accepts_kwargs")
+
+    def __init__(self, handler: Callable):
+        self.handler = handler
+        self.is_async = inspect.iscoroutinefunction(handler)
+        sig = inspect.signature(handler)
+        self.accepts_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        self.single_body_param = None
+        params = list(sig.parameters.values())
+        if len(params) == 1:
+            p = params[0]
+            if p.name in ("user", "payload", "body", "data") or p.annotation in (dict, Dict, Any):
+                self.single_body_param = p.name
+
+HANDLER_CACHE: Dict[str, HandlerMetadata] = {}
+
+def get_handler_metadata(route_id: str, raw_func: Callable) -> HandlerMetadata:
+    cached = HANDLER_CACHE.get(route_id)
+    if cached is None:
+        cached = HandlerMetadata(raw_func)
+        HANDLER_CACHE[route_id] = cached
+    return cached
 
 def match_route(method: str, path: str):
     return _rustcore.match_route(method, path)
@@ -29,9 +62,11 @@ def register_route(
     _rustcore.register_route(method, path, route_id, param_types, body_schema)
 
 def _sync_app_routes(app: FastAPI):
-    if getattr(app, "_rust_synced", False):
+    if getattr(app, "_routes_synced", False):
         return
-    app._rust_synced = True
+    app._routes_synced = True
+
+    has_oxide = False
     for route in app.routes:
         endpoint = getattr(route, "endpoint", None)
         if endpoint is None:
@@ -41,6 +76,7 @@ def _sync_app_routes(app: FastAPI):
             route_id = getattr(endpoint.__wrapped__, "__rust_route_id__", None)
 
         if route_id:
+            has_oxide = True
             param_types = getattr(
                 endpoint,
                 "__rust_param_types__",
@@ -57,29 +93,29 @@ def _sync_app_routes(app: FastAPI):
                 getattr(getattr(endpoint, "__wrapped__", None), "__rust_func__", endpoint),
             )
             HANDLERS[route_id] = raw_func
+            get_handler_metadata(route_id, raw_func)
+
             path = getattr(route, "path", None)
             methods = getattr(route, "methods", ["GET"])
             for m in methods:
                 if path:
                     _rustcore.register_route(m, path, route_id, param_types, schema)
 
-def prepare_handler_args(handler: Callable, params: dict) -> dict:
-    sig = inspect.signature(handler)
-    kwargs = {}
+    app._has_oxide_routes = has_oxide
+    app._fastapi_routes = {
+        (m, getattr(r, "path", None))
+        for r in app.routes
+        for m in getattr(r, "methods", ["GET"])
+    }
+
+def prepare_args_fast(meta: HandlerMetadata, params: dict) -> dict:
     body = params.pop("__body__", None)
-
-    for param_name, param in sig.parameters.items():
-        if param_name in params:
-            kwargs[param_name] = params[param_name]
-        elif body is not None:
-            if isinstance(body, dict) and param_name in body:
-                kwargs[param_name] = body[param_name]
-            elif param.annotation in (dict, Dict, Any, inspect.Parameter.empty) or len(sig.parameters) == 1:
-                kwargs[param_name] = body
-            elif isinstance(body, dict) and param.name in ("user", "payload", "body", "data"):
-                kwargs[param_name] = body
-
-    return kwargs
+    if body is not None:
+        if meta.single_body_param:
+            params[meta.single_body_param] = body
+        elif isinstance(body, dict):
+            params.update(body)
+    return params
 
 async def send_json(send, status_code: int, content: Any):
     if isinstance(content, (bytes, bytearray)):
@@ -93,7 +129,7 @@ async def send_json(send, status_code: int, content: Any):
         "type": "http.response.start",
         "status": status_code,
         "headers": [
-            (b"content-type", b"application/json"),
+            STATIC_HEADER_CONTENT_TYPE,
             (b"content-length", str(len(payload)).encode("latin-1")),
         ],
     })
@@ -109,7 +145,12 @@ async def _oxide_fastapi_call(self, scope, receive, send):
         await _original_fastapi_call(self, scope, receive, send)
         return
 
-    _sync_app_routes(self)
+    if not getattr(self, "_routes_synced", False):
+        _sync_app_routes(self)
+
+    if not getattr(self, "_has_oxide_routes", True):
+        await _original_fastapi_call(self, scope, receive, send)
+        return
 
     path = scope.get("path", "")
     method = scope.get("method", "GET").upper()
@@ -118,30 +159,33 @@ async def _oxide_fastapi_call(self, scope, receive, send):
         await _original_fastapi_call(self, scope, receive, send)
         return
 
-    matched = _rustcore.match_route(method, path)
-    if matched is None:
-        has_fastapi_route = any(
-            getattr(r, "path", None) == path and method in getattr(r, "methods", set())
-            for r in self.routes
-        )
-        if has_fastapi_route:
-            await _original_fastapi_call(self, scope, receive, send)
-            return
-        await send_json(send, 404, {"detail": "Not Found"})
-        return
-
-    body_bytes = b""
-    if method in ("POST", "PUT", "PATCH", "DELETE"):
+    body_bytes = None
+    if method in ("POST", "PUT", "PATCH"):
+        body_buf = []
         more_body = True
         while more_body:
             msg = await receive()
-            body_bytes += msg.get("body", b"")
+            b = msg.get("body", b"")
+            if b:
+                body_buf.append(b)
             more_body = msg.get("more_body", False)
+        body_bytes = b"".join(body_buf) if body_buf else b""
 
     query_str = scope.get("query_string", b"").decode("latin-1")
     res = _rustcore.handle_request(method, path, query_str, body_bytes)
     if res is None:
-        await send_json(send, 404, {"detail": "Not Found"})
+        if (method, path) in getattr(self, "_fastapi_routes", ()):
+            await _original_fastapi_call(self, scope, receive, send)
+            return
+        await send({
+            "type": "http.response.start",
+            "status": 404,
+            "headers": NOT_FOUND_HEADERS,
+        })
+        await send({
+            "type": "http.response.body",
+            "body": NOT_FOUND_BODY,
+        })
         return
 
     status_code, route_id, data = res
@@ -150,17 +194,19 @@ async def _oxide_fastapi_call(self, scope, receive, send):
         await send_json(send, 422, data)
         return
 
-    handler = HANDLERS.get(route_id)
-    if handler is None:
+    raw_func = HANDLERS.get(route_id)
+    if raw_func is None:
         await send_json(send, 500, {"detail": f"Handler '{route_id}' not found"})
         return
 
-    args = prepare_handler_args(handler, dict(data))
+    meta = get_handler_metadata(route_id, raw_func)
+    args = prepare_args_fast(meta, dict(data))
+
     try:
-        if inspect.iscoroutinefunction(handler):
-            result = await handler(**args)
+        if meta.is_async:
+            result = await raw_func(**args)
         else:
-            result = handler(**args)
+            result = raw_func(**args)
     except HTTPException as exc:
         await send_json(send, exc.status_code, {"detail": exc.detail})
         return
