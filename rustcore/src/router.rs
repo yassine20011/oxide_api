@@ -18,10 +18,7 @@ pub struct Router {
 
 impl Router {
     pub fn new() -> Self {
-        Self {
-            methods: HashMap::new(),
-            routes: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn add_route(
@@ -51,7 +48,7 @@ impl Router {
         }
 
         let mut new_router = MatchitRouter::new();
-        for r in route_list.iter() {
+        for r in route_list {
             new_router
                 .insert(&r.path, r.clone())
                 .map_err(|e| e.to_string())?;
