@@ -149,6 +149,7 @@ pub fn validate_input<'py>(
     Ok(out)
 }
 
+#[allow(clippy::type_complexity)]
 #[pyfunction]
 #[pyo3(signature = (method, path, _query_string=None, body_bytes=None))]
 pub fn handle_request<'py>(

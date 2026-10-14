@@ -52,10 +52,13 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install dependencies
+      - name: Create virtualenv & install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install "fastapi>=0.68.0" "uvicorn[standard]>=0.15.0" "pytest>=6.0" "httpx>=0.24.0" "pydantic>=1.8.0" orjson maturin
+          python -m venv .venv
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$GITHUB_WORKSPACE/.venv" >> $GITHUB_ENV
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install "fastapi>=0.68.0" "uvicorn[standard]>=0.15.0" "pytest>=6.0" "httpx>=0.24.0" "pydantic>=1.8.0" orjson maturin
 
       - name: Build extension with maturin
         run: maturin develop --release

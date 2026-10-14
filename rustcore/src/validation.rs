@@ -108,10 +108,8 @@ pub fn validate_body(
             }
             Some(val) => {
                 match field_type.to_lowercase().as_str() {
-                    "str" | "string" => {
-                        if !val.is_string() {
-                            errors.push(format!("Field '{}' must be a string", field_name));
-                        }
+                    "str" | "string" if !val.is_string() => {
+                        errors.push(format!("Field '{}' must be a string", field_name));
                     }
                     "int" | "integer" | "i64" | "i32" => {
                         if let Some(i) = val.as_i64() {
@@ -122,25 +120,17 @@ pub fn validate_body(
                             errors.push(format!("Field '{}' must be an integer", field_name));
                         }
                     }
-                    "float" | "number" => {
-                        if !val.is_number() {
-                            errors.push(format!("Field '{}' must be a number", field_name));
-                        }
+                    "float" | "number" if !val.is_number() => {
+                        errors.push(format!("Field '{}' must be a number", field_name));
                     }
-                    "bool" | "boolean" => {
-                        if !val.is_boolean() {
-                            errors.push(format!("Field '{}' must be a boolean", field_name));
-                        }
+                    "bool" | "boolean" if !val.is_boolean() => {
+                        errors.push(format!("Field '{}' must be a boolean", field_name));
                     }
-                    "dict" | "object" => {
-                        if !val.is_object() {
-                            errors.push(format!("Field '{}' must be an object", field_name));
-                        }
+                    "dict" | "object" if !val.is_object() => {
+                        errors.push(format!("Field '{}' must be an object", field_name));
                     }
-                    "list" | "array" => {
-                        if !val.is_array() {
-                            errors.push(format!("Field '{}' must be an array", field_name));
-                        }
+                    "list" | "array" if !val.is_array() => {
+                        errors.push(format!("Field '{}' must be an array", field_name));
                     }
                     _ => {}
                 }
