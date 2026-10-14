@@ -1,14 +1,18 @@
 [package]
 name = "rustcore"
 version = "0.1.0"
-edition = "2025"
+edition = "2021"
 
 [lib]
-name = "rustcore"
-crate-type = ["cdylib"]
+name = "_rustcore"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { workspace = true, features = ["extension-module"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-regex = "1.0"
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+matchit = "0.9"
+
+[[test]]
+name = "test_rust_core"
+path = "../tests/test_rust_core.rs"
